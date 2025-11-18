@@ -11,7 +11,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 
-	"github.com/shift8-projects/caddy-altcha/altcha"
+	"github.com/stardothosting/caddy-altcha/altcha"
 )
 
 // ChallengeHandler generates ALTCHA challenges

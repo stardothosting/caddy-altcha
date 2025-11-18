@@ -2,7 +2,7 @@
 
 # Build the Caddy binary with the ALTCHA module
 build:
-	xcaddy build --with github.com/shift8-projects/caddy-altcha=.
+	xcaddy build --with github.com/stardothosting/caddy-altcha=.
 
 # Run tests (verbose)
 test:

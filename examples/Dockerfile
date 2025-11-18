@@ -1,7 +1,7 @@
 FROM caddy:2-builder AS builder
 
 RUN xcaddy build \
-    --with github.com/shift8-projects/caddy-altcha
+    --with github.com/stardothosting/caddy-altcha
 
 FROM caddy:2
 

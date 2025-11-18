@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
-	"github.com/shift8-projects/caddy-altcha/altcha"
+	"github.com/stardothosting/caddy-altcha/altcha"
 )
 
 func TestChallengeHandler_Provision(t *testing.T) {

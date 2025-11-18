@@ -1,0 +1,322 @@
+{
+  "admin": {
+    "listen": ":2021"
+  },
+  "apps": {
+    "http": {
+      "http_port": 80,
+      "https_port": 443,
+      "servers": {
+        "edge": {
+          "listen": [":80", ":443"],
+          "logs": {
+            "logger_names": {
+              "default": "access_log"
+            }
+          },
+          "routes": [
+            {
+              "@comment": "ALTCHA Test Endpoint - For testing captcha integration",
+              "match": [
+                {
+                  "host": ["test.cdn.shift8web.com"]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "@comment": "ALTCHA Challenge Generation Endpoint",
+                      "match": [
+                        {
+                          "path": ["/api/altcha/challenge"]
+                        }
+                      ],
+                      "handle": [
+                        {
+                          "handler": "altcha_challenge",
+                          "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+                          "algorithm": "SHA-256",
+                          "max_number": 100000,
+                          "expires": "5m",
+                          "salt_length": 12
+                        }
+                      ]
+                    },
+                    {
+                      "@comment": "ALTCHA Challenge UI Page",
+                      "match": [
+                        {
+                          "path": ["/captcha"]
+                        }
+                      ],
+                      "handle": [
+                        {
+                          "handler": "file_server",
+                          "root": "/var/www/altcha"
+                        }
+                      ]
+                    },
+                    {
+                      "@comment": "Protected endpoint requiring ALTCHA verification",
+                      "match": [
+                        {
+                          "path": ["/protected"]
+                        }
+                      ],
+                      "handle": [
+                        {
+                          "handler": "altcha_verify",
+                          "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+                          "session_backend": "memory://",
+                          "session_ttl": "5m",
+                          "verified_cookie_name": "altcha_verified_test",
+                          "verified_cookie_ttl": 3600,
+                          "verified_cookie_secure": true,
+                          "verified_cookie_http_only": true,
+                          "verified_cookie_same_site": "lax",
+                          "challenge_redirect": "/captcha",
+                          "preserve_post_data": true,
+                          "verify_field_name": "altcha"
+                        },
+                        {
+                          "handler": "static_response",
+                          "status_code": 200,
+                          "headers": {
+                            "Content-Type": ["application/json"]
+                          },
+                          "body": "{\"success\": true, \"message\": \"ALTCHA verification passed!\", \"timestamp\": \"{http.request.time}\"}"
+                        }
+                      ]
+                    },
+                    {
+                      "@comment": "Test POST endpoint with ALTCHA protection",
+                      "match": [
+                        {
+                          "path": ["/api/submit"],
+                          "method": ["POST"]
+                        }
+                      ],
+                      "handle": [
+                        {
+                          "handler": "altcha_verify",
+                          "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+                          "session_backend": "memory://",
+                          "session_ttl": "5m",
+                          "verified_cookie_name": "altcha_verified_test",
+                          "challenge_redirect": "/captcha",
+                          "preserve_post_data": true
+                        },
+                        {
+                          "handler": "static_response",
+                          "status_code": 200,
+                          "headers": {
+                            "Content-Type": ["application/json"]
+                          },
+                          "body": "{\"success\": true, \"message\": \"POST data received and ALTCHA verified!\", \"note\": \"Original POST data was preserved\"}"
+                        }
+                      ]
+                    },
+                    {
+                      "@comment": "Health check endpoint - no ALTCHA required",
+                      "match": [
+                        {
+                          "path": ["/health"]
+                        }
+                      ],
+                      "handle": [
+                        {
+                          "handler": "static_response",
+                          "status_code": 200,
+                          "headers": {
+                            "Content-Type": ["application/json"]
+                          },
+                          "body": "{\"status\": \"ok\", \"altcha_module\": \"loaded\"}"
+                        }
+                      ]
+                    },
+                    {
+                      "@comment": "Documentation/Info page",
+                      "match": [
+                        {
+                          "path": ["/"]
+                        }
+                      ],
+                      "handle": [
+                        {
+                          "handler": "static_response",
+                          "status_code": 200,
+                          "headers": {
+                            "Content-Type": ["text/html"]
+                          },
+                          "body": "<!DOCTYPE html><html><head><title>ALTCHA Test</title><style>body{font-family:sans-serif;max-width:800px;margin:50px auto;padding:20px;}code{background:#f4f4f4;padding:2px 6px;border-radius:3px;}a{color:#2196F3;}</style></head><body><h1>ALTCHA Module Test Endpoints</h1><ul><li><a href=\"/health\">/health</a> - Health check (no ALTCHA)</li><li><a href=\"/api/altcha/challenge\">/api/altcha/challenge</a> - Get ALTCHA challenge (JSON)</li><li><a href=\"/captcha\">/captcha</a> - Challenge UI page</li><li><a href=\"/protected\">/protected</a> - Protected endpoint (requires ALTCHA)</li><li><code>POST /api/submit</code> - Protected POST endpoint</li></ul><h2>Testing Instructions</h2><ol><li>Visit <a href=\"/protected\">/protected</a> - you'll be redirected to /captcha</li><li>Complete the ALTCHA widget</li><li>You'll be redirected back to /protected with success message</li><li>Cookie is set - subsequent requests to /protected will pass</li></ol><p><strong>Note:</strong> Set <code>ALTCHA_HMAC_KEY</code> environment variable before starting Caddy.</p></body></html>"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "@comment": "CDN Routes - shift8web.com",
+              "match": [
+                {
+                  "host": ["*.cdn.shift8web.com"]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "delete": ["Server"]
+                  }
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "transport": {
+                    "protocol": "http",
+                    "tls": {
+                      "insecure_skip_verify": true
+                    }
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8443"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "@comment": "CDN Routes - shift8web.ca",
+              "match": [
+                {
+                  "host": ["*.cdn.shift8web.ca"]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "delete": ["Server"]
+                  }
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "transport": {
+                    "protocol": "http",
+                    "tls": {
+                      "insecure_skip_verify": true
+                    }
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8443"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "@comment": "CDN Routes - wpcdn.shift8cdn.com",
+              "match": [
+                {
+                  "host": ["*.wpcdn.shift8cdn.com"]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "delete": ["Server"]
+                  }
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "transport": {
+                    "protocol": "http",
+                    "tls": {
+                      "insecure_skip_verify": true
+                    }
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8443"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "tls": {
+      "certificates": {
+        "load_files": [
+          {
+            "certificate": "/etc/caddy/certificates/cdn.shift8web.com.bundle.crt",
+            "key": "/etc/caddy/certificates/cdn.shift8web.com.key",
+            "tags": ["cdn.shift8web.com"]
+          },
+          {
+            "certificate": "/etc/caddy/certificates/cdn.shift8web.ca.bundle.crt",
+            "key": "/etc/caddy/certificates/cdn.shift8web.ca.key",
+            "tags": ["cdn.shift8web.ca"]
+          },
+          {
+            "certificate": "/etc/caddy/certificates/wpcdn.shift8cdn.com.bundle.crt",
+            "key": "/etc/caddy/certificates/wpcdn.shift8cdn.com.key",
+            "tags": ["wpcdn.shift8cdn.com"]
+          }
+        ]
+      }
+    }
+  },
+  "logging": {
+    "logs": {
+      "access_log": {
+        "level": "INFO",
+        "encoder": {
+          "format": "json"
+        },
+        "writer": {
+          "output": "file",
+          "filename": "/var/log/caddy/access.log"
+        },
+        "include": [
+          "http.log"
+        ]
+      },
+      "waf_log": {
+        "level": "INFO",
+        "encoder": {
+          "format": "json"
+        },
+        "writer": {
+          "output": "file",
+          "filename": "/var/log/caddy/waf.log"
+        },
+        "include": [
+          "http.handlers.waf"
+        ]
+      },
+      "altcha_log": {
+        "level": "INFO",
+        "encoder": {
+          "format": "json"
+        },
+        "writer": {
+          "output": "file",
+          "filename": "/var/log/caddy/altcha.log"
+        },
+        "include": [
+          "http.handlers.altcha_challenge",
+          "http.handlers.altcha_verify"
+        ]
+      }
+    }
+  }
+}
+

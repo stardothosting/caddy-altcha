@@ -13,7 +13,7 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
-	"github.com/shift8-projects/caddy-altcha/altcha"
+	"github.com/stardothosting/caddy-altcha/altcha"
 )
 
 // TestVerifyHandler_ServeHTTP_WithValidCookie tests that handler calls next when valid cookie present

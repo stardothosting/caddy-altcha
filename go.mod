@@ -1,4 +1,4 @@
-module github.com/shift8-projects/caddy-altcha
+module github.com/stardothosting/caddy-altcha
 
 go 1.21.0
 

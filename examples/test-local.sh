@@ -15,7 +15,7 @@ echo ""
 if [ ! -f "../caddy" ]; then
     echo "❌ Caddy binary not found. Building..."
     cd ..
-    xcaddy build --with github.com/shift8-projects/caddy-altcha=.
+    xcaddy build --with github.com/stardothosting/caddy-altcha=.
     cd examples
     echo "✅ Caddy built successfully"
 fi

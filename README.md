@@ -27,7 +27,7 @@ The only external dependency is the ALTCHA JavaScript widget (can be self-hosted
 Build Caddy with the ALTCHA module:
 
 ```bash
-xcaddy build --with github.com/shift8-projects/caddy-altcha
+xcaddy build --with github.com/stardothosting/caddy-altcha
 ```
 
 Or using Docker:
@@ -334,7 +334,7 @@ redis-cli -u redis://localhost:6379/0 ping
 git clone https://github.com/shift8-projects/caddy-altcha.git
 cd caddy-altcha
 go mod download
-xcaddy build --with github.com/shift8-projects/caddy-altcha=.
+xcaddy build --with github.com/stardothosting/caddy-altcha=.
 ```
 
 ### Run Tests

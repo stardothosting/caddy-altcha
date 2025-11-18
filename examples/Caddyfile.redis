@@ -1,0 +1,64 @@
+# Production ALTCHA Configuration with Redis
+# Use Redis for distributed session storage
+
+{
+    admin off
+    order altcha_verify before reverse_proxy
+}
+
+example.com {
+    # Challenge generation endpoint
+    route /api/altcha/challenge {
+        altcha_challenge {
+            hmac_key {env.ALTCHA_HMAC_KEY}
+            algorithm SHA-256
+            max_number 100000
+            expires 5m
+        }
+    }
+    
+    # Challenge UI page
+    route /captcha {
+        root * /var/www/altcha
+        file_server
+    }
+    
+    # Protect all API endpoints except health checks
+    @api {
+        path /api/*
+        not path /api/health /api/status
+    }
+    
+    # Protect authentication endpoints
+    @auth {
+        path /login /register /reset-password
+    }
+    
+    # Protect form submissions
+    @forms {
+        path /contact /subscribe
+        method POST
+    }
+    
+    # Combine matchers
+    altcha_verify {
+        expression {http.request.uri.path}.startsWith("/api/") || {http.request.uri.path}.startsWith("/login")
+        
+        hmac_key {env.ALTCHA_HMAC_KEY}
+        session_backend redis://localhost:6379/0
+        session_ttl 5m
+        
+        verified_cookie_name altcha_verified
+        verified_cookie_ttl 3600
+        verified_cookie_secure true
+        verified_cookie_http_only true
+        verified_cookie_same_site lax
+        
+        challenge_redirect /captcha
+        preserve_post_data true
+    }
+    
+    # Reverse proxy to backend
+    reverse_proxy localhost:8080
+}
+

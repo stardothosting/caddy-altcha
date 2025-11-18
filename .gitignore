@@ -1,0 +1,49 @@
+# Binaries
+caddy
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Build artifacts
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Caddy
+/data/
+/config/
+
+# Session files
+/sessions/
+*.session
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+coverage.txt
+coverage.html
+
+# Test artifacts
+session/file:*/
+
+.cursorrules

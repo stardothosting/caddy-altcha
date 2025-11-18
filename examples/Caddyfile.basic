@@ -1,0 +1,48 @@
+# Basic ALTCHA Configuration
+# This is a simple setup with in-memory session storage
+
+{
+    # Global options
+    admin off
+    
+    # Order is important - altcha_verify must run before reverse_proxy
+    order altcha_verify before reverse_proxy
+}
+
+example.com {
+    # Challenge generation endpoint
+    route /api/altcha/challenge {
+        altcha_challenge {
+            hmac_key {env.ALTCHA_HMAC_KEY}
+            algorithm SHA-256
+            max_number 100000
+            expires 5m
+        }
+    }
+    
+    # Challenge UI page
+    route /captcha {
+        root * /var/www/altcha
+        file_server
+    }
+    
+    # Apply verification to specific routes using Caddy matchers
+    @protected {
+        path /login /register /api/submit
+        not remote_ip 192.168.0.0/16  # Skip internal network
+    }
+    
+    altcha_verify @protected {
+        hmac_key {env.ALTCHA_HMAC_KEY}
+        session_backend memory://
+        session_ttl 5m
+        verified_cookie_name altcha_ok
+        verified_cookie_ttl 3600
+        challenge_redirect /captcha
+        preserve_post_data true
+    }
+    
+    # Your application
+    reverse_proxy localhost:8080
+}
+

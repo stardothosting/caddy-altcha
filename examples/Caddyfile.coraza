@@ -1,0 +1,106 @@
+# ALTCHA with Coraza WAF Integration
+# Only challenge requests flagged as suspicious by Coraza
+
+{
+    admin off
+    
+    # Order matters: Coraza analyzes first, then ALTCHA challenges if needed
+    order coraza_waf before altcha_verify
+    order altcha_verify before reverse_proxy
+}
+
+example.com {
+    # Coraza WAF analyzes all requests
+    coraza_waf {
+        directives `
+            # Load OWASP Core Rule Set
+            Include /etc/coraza/crs-setup.conf
+            Include /etc/coraza/rules/*.conf
+            
+            # Set environment variable when anomaly score is high
+            SecRule TX:ANOMALY_SCORE "@ge 5" \
+                "id:1001,phase:2,pass,setenv:altcha_required=1,log,msg:'Request flagged for ALTCHA verification'"
+            
+            # Lower threshold for specific paths
+            SecRule REQUEST_URI "@rx ^/(login|register|api/submit)" \
+                "id:1002,phase:1,pass,chain"
+                SecRule TX:ANOMALY_SCORE "@ge 3" \
+                    "id:1003,phase:2,pass,setenv:altcha_required=1,log,msg:'High-value endpoint with elevated score'"
+        `
+    }
+    
+    # Challenge generation endpoint (always available)
+    route /api/altcha/challenge {
+        altcha_challenge {
+            hmac_key {env.ALTCHA_HMAC_KEY}
+            algorithm SHA-256
+            max_number 100000
+            expires 5m
+        }
+    }
+    
+    # Challenge UI (always available)
+    route /captcha {
+        root * /var/www/altcha
+        file_server
+    }
+    
+    # Only challenge requests flagged by Coraza
+    altcha_verify {
+        hmac_key {env.ALTCHA_HMAC_KEY}
+        session_backend redis://localhost:6379/0
+        session_ttl 5m
+        
+        # Check for Coraza's environment variable
+        coraza_env_var altcha_required
+        
+        verified_cookie_name altcha_ok
+        verified_cookie_ttl 3600
+        challenge_redirect /captcha
+        preserve_post_data true
+    }
+    
+    # Application backend
+    reverse_proxy backend:8080
+    
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+
+# Alternative: Multiple sites with different thresholds
+suspicious.example.com {
+    coraza_waf {
+        directives `
+            Include /etc/coraza/crs-setup.conf
+            Include /etc/coraza/rules/*.conf
+            
+            # Very strict: challenge everything with score > 0
+            SecRule TX:ANOMALY_SCORE "@gt 0" \
+                "id:2001,phase:2,pass,setenv:altcha_required=1"
+        `
+    }
+    
+    route /api/altcha/challenge {
+        altcha_challenge {
+            hmac_key {env.ALTCHA_HMAC_KEY}
+        }
+    }
+    
+    route /captcha {
+        root * /var/www/altcha
+        file_server
+    }
+    
+    altcha_verify {
+        hmac_key {env.ALTCHA_HMAC_KEY}
+        session_backend redis://localhost:6379/1
+        coraza_env_var altcha_required
+        challenge_redirect /captcha
+    }
+    
+    reverse_proxy backend:8080
+}
+

@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  caddy:
+    image: caddy:2-builder
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.redis:/etc/caddy/Caddyfile
+      - ./www:/var/www/altcha
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - ALTCHA_HMAC_KEY=${ALTCHA_HMAC_KEY:-changeme_min_32_characters_long_key}
+    depends_on:
+      - redis
+      - backend
+    restart: unless-stopped
+  
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+  
+  backend:
+    image: nginx:alpine
+    volumes:
+      - ./backend:/usr/share/nginx/html
+    expose:
+      - "80"
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+  redis_data:
+

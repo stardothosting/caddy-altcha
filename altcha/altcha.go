@@ -1,6 +1,7 @@
 package altcha
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,8 +11,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash"
+	"image"
+	"image/color"
+	"image/png"
 	"strings"
 	"time"
+	
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
 // ChallengeOptions contains options for creating a challenge
@@ -23,13 +31,20 @@ type ChallengeOptions struct {
 	Expires    time.Time
 }
 
+// CodeChallenge represents an optional visual code challenge
+type CodeChallenge struct {
+	Image  string `json:"image"`  // base64-encoded PNG
+	Length int    `json:"length"` // code length
+}
+
 // Challenge represents an ALTCHA challenge
 type Challenge struct {
-	Algorithm string `json:"algorithm"`
-	Challenge string `json:"challenge"`
-	MaxNumber int    `json:"maxNumber"`
-	Salt      string `json:"salt"`
-	Signature string `json:"signature"`
+	Algorithm     string         `json:"algorithm"`
+	Challenge     string         `json:"challenge"`
+	MaxNumber     int            `json:"maxNumber"`
+	Salt          string         `json:"salt"`
+	Signature     string         `json:"signature"`
+	CodeChallenge *CodeChallenge `json:"codeChallenge,omitempty"`
 }
 
 // Solution represents an ALTCHA solution
@@ -251,4 +266,139 @@ func ValidateChallenge(challenge *Challenge, hmacKey string) bool {
 	}
 
 	return challenge.Signature == expectedSignature
+}
+
+// GenerateCodeChallenge creates a visual code challenge (image with random code)
+func GenerateCodeChallenge(length int) (*CodeChallenge, string, error) {
+	if length <= 0 {
+		length = 6
+	}
+	
+	// Generate random alphanumeric code
+	code, err := generateRandomCode(length)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate code: %w", err)
+	}
+	
+	// Create image with code
+	imageData, err := createCodeImage(code)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create image: %w", err)
+	}
+	
+	return &CodeChallenge{
+		Image:  imageData,
+		Length: length,
+	}, code, nil
+}
+
+// generateRandomCode creates a random alphanumeric code
+func generateRandomCode(length int) (string, error) {
+	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Exclude similar characters
+	code := make([]byte, length)
+	randomBytes := make([]byte, length)
+	
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", err
+	}
+	
+	for i := range code {
+		code[i] = charset[int(randomBytes[i])%len(charset)]
+	}
+	
+	return string(code), nil
+}
+
+// createCodeImage generates a PNG image with the given code
+func createCodeImage(code string) (string, error) {
+	// Image dimensions
+	width := 200
+	height := 60
+	
+	// Create image
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	
+	// Fill background
+	bgColor := color.RGBA{240, 240, 240, 255}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, bgColor)
+		}
+	}
+	
+	// Add noise lines
+	noiseColor := color.RGBA{200, 200, 200, 255}
+	for i := 0; i < 5; i++ {
+		randomBytes := make([]byte, 4)
+		rand.Read(randomBytes)
+		x1 := int(randomBytes[0]) % width
+		y1 := int(randomBytes[1]) % height
+		x2 := int(randomBytes[2]) % width
+		y2 := int(randomBytes[3]) % height
+		drawLine(img, x1, y1, x2, y2, noiseColor)
+	}
+	
+	// Draw text
+	textColor := color.RGBA{0, 0, 0, 255}
+	point := fixed.Point26_6{X: fixed.Int26_6(20 * 64), Y: fixed.Int26_6(40 * 64)}
+	
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(textColor),
+		Face: basicfont.Face7x13,
+		Dot:  point,
+	}
+	
+	// Draw each character with slight offset
+	for i, ch := range code {
+		d.Dot.X = fixed.Int26_6((20 + i*25) * 64)
+		d.DrawString(string(ch))
+	}
+	
+	// Encode to PNG
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return "", err
+	}
+	
+	// Return as base64
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+// drawLine draws a simple line on the image
+func drawLine(img *image.RGBA, x1, y1, x2, y2 int, c color.Color) {
+	dx := abs(x2 - x1)
+	dy := abs(y2 - y1)
+	sx, sy := 1, 1
+	if x1 >= x2 {
+		sx = -1
+	}
+	if y1 >= y2 {
+		sy = -1
+	}
+	err := dx - dy
+	
+	for {
+		img.Set(x1, y1, c)
+		if x1 == x2 && y1 == y2 {
+			break
+		}
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			x1 += sx
+		}
+		if e2 < dx {
+			err += dx
+			y1 += sy
+		}
+	}
+}
+
+// abs returns absolute value
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }

@@ -31,6 +31,12 @@ type ChallengeHandler struct {
 	// SaltLength is the length of the random salt
 	SaltLength int `json:"salt_length,omitempty"`
 
+	// CodeChallenge enables visual code challenges (obfuscation)
+	CodeChallenge bool `json:"code_challenge,omitempty"`
+
+	// CodeLength is the length of the visual code (default: 6)
+	CodeLength int `json:"code_length,omitempty"`
+
 	log *zap.Logger
 }
 
@@ -58,6 +64,9 @@ func (h *ChallengeHandler) Provision(ctx caddy.Context) error {
 	}
 	if h.SaltLength == 0 {
 		h.SaltLength = 12
+	}
+	if h.CodeLength == 0 {
+		h.CodeLength = 6
 	}
 
 	h.log.Info("provisioning ALTCHA challenge handler",
@@ -120,9 +129,22 @@ func (h *ChallengeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, nex
 		return caddyhttp.Error(http.StatusInternalServerError, fmt.Errorf("failed to create challenge"))
 	}
 
+	// Add code challenge if enabled
+	if h.CodeChallenge {
+		codeChallenge, _, err := altcha.GenerateCodeChallenge(h.CodeLength)
+		if err != nil {
+			h.log.Error("failed to generate code challenge", zap.Error(err))
+			// Continue without code challenge rather than failing
+		} else {
+			challenge.CodeChallenge = codeChallenge
+			h.log.Debug("generated code challenge", zap.Int("length", h.CodeLength))
+		}
+	}
+
 	h.log.Debug("generated challenge",
 		zap.String("algorithm", challenge.Algorithm),
 		zap.String("challenge", challenge.Challenge),
+		zap.Bool("has_code_challenge", challenge.CodeChallenge != nil),
 	)
 
 	// Return as JSON
@@ -178,6 +200,26 @@ func (h *ChallengeHandler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("invalid salt_length: %v", err)
 				}
 				h.SaltLength = saltLen
+
+			case "code_challenge":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				var enabled bool
+				if _, err := fmt.Sscanf(d.Val(), "%t", &enabled); err != nil {
+					return d.Errf("invalid code_challenge (use true/false): %v", err)
+				}
+				h.CodeChallenge = enabled
+
+			case "code_length":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				var codeLen int
+				if _, err := fmt.Sscanf(d.Val(), "%d", &codeLen); err != nil {
+					return d.Errf("invalid code_length: %v", err)
+				}
+				h.CodeLength = codeLen
 
 			default:
 				return d.Errf("unknown subdirective: %s", d.Val())

@@ -24,7 +24,13 @@ The only external dependency is the ALTCHA JavaScript widget (can be self-hosted
 
 ## Installation
 
-Build Caddy with the ALTCHA module:
+Build Caddy with the ALTCHA module using a specific Caddy version (recommended for stability):
+
+```bash
+xcaddy build v2.8.4 --with github.com/stardothosting/caddy-altcha
+```
+
+Or build with the latest Caddy:
 
 ```bash
 xcaddy build --with github.com/stardothosting/caddy-altcha
@@ -36,6 +42,8 @@ Or using Docker:
 cd examples
 docker-compose up
 ```
+
+**Note:** Using a specific Caddy version (e.g., `v2.8.4`) prevents compatibility issues with newer Go versions and ensures build reproducibility.
 
 ## Basic Configuration
 
@@ -91,6 +99,59 @@ Copy the example HTML to your web root:
 cp examples/www/index.html /var/www/altcha/index.html
 ```
 
+## Widget Configuration
+
+Create an HTML page with the ALTCHA widget (proof-of-work only):
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verification Required</title>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/altcha@1.0.5/dist/altcha.min.js"></script>
+</head>
+<body>
+    <h1>Verification Required</h1>
+    <p>Please complete the challenge below.</p>
+    
+    <altcha-widget
+        name="altcha"
+        challengeurl="/api/altcha/challenge"
+        hidefooter="false">
+    </altcha-widget>
+    
+    <script>
+        const widget = document.querySelector('altcha-widget');
+        widget.addEventListener('statechange', (ev) => {
+            if (ev.detail.state === 'verified') {
+                const payload = ev.detail.payload;
+                window.location.href = `/protected?altcha=${encodeURIComponent(payload)}`;
+            }
+        });
+    </script>
+</body>
+</html>
+```
+
+**With Code Challenges (optional visual CAPTCHA):**
+
+```html
+<script type="module" src="https://cdn.jsdelivr.net/npm/altcha@1.0.5/dist/altcha.min.js"></script>
+<script type="module" src="https://cdn.jsdelivr.net/npm/altcha@1.0.5/obfuscation"></script>
+
+<altcha-widget
+    name="altcha"
+    challengeurl="/api/altcha/challenge"
+    plugins="obfuscation"
+    hidefooter="false">
+</altcha-widget>
+```
+
+**Important:** 
+- Pin the widget version (e.g., `@1.0.5`) to prevent breaking changes
+- Do NOT add `verifyurl` attribute for self-hosted mode
+- The widget solves challenges client-side and passes the solution via URL/form
+
 ## Configuration Reference
 
 ### altcha_challenge
@@ -102,10 +163,23 @@ altcha_challenge {
     hmac_key <string>           # Required: HMAC secret key (min 32 chars recommended)
     algorithm <string>          # SHA-256, SHA-384, or SHA-512 (default: SHA-256)
     max_number <int>            # Maximum random number (default: 100000)
+                                # Recommended: 1000000 (~200ms solve time)
     expires <duration>          # Challenge validity (default: 5m)
     salt_length <int>           # Salt length in bytes (default: 12)
+    code_challenge <bool>       # Enable visual code challenges (default: false)
+    code_length <int>           # Visual code length (default: 6, requires code_challenge: true)
 }
 ```
+
+**Difficulty Tuning (max_number):**
+- `100000` - Very fast (~20ms solve time), light protection
+- `1000000` - **Recommended** (~200ms solve time), good balance
+- `10000000` - High security (~2s solve time), may frustrate users
+
+**Code Challenges (Optional):**
+- Set `code_challenge: true` to add visual code input on top of proof-of-work
+- Similar to traditional CAPTCHAs but with computational challenge first
+- Requires ALTCHA obfuscation plugin in your HTML (see Widget Configuration)
 
 ### altcha_verify
 
@@ -227,24 +301,44 @@ For production deployments using JSON configuration (common in WAF-as-a-service 
                 "handler": "subroute",
                 "routes": [
                   {
-                    "match": [{"path": ["/api/altcha/challenge"]}],
+                    "match": [{
+                      "path_regexp": {
+                        "pattern": "^/api/altcha/challenge/?$"
+                      }
+                    }],
                     "handle": [{
                       "handler": "altcha_challenge",
                       "hmac_key": "{env.ALTCHA_HMAC_KEY}",
                       "algorithm": "SHA-256",
-                      "max_number": 100000,
+                      "max_number": 1000000,
                       "expires": "5m"
-                    }]
+                    }],
+                    "terminal": true
                   },
                   {
-                    "match": [{"path": ["/captcha"]}],
-                    "handle": [{
-                      "handler": "file_server",
-                      "root": "/var/www/altcha"
-                    }]
+                    "match": [{
+                      "path_regexp": {
+                        "pattern": "^/captcha/?$"
+                      }
+                    }],
+                    "handle": [
+                      {
+                        "handler": "rewrite",
+                        "uri": "/index.html"
+                      },
+                      {
+                        "handler": "file_server",
+                        "root": "/var/www/altcha"
+                      }
+                    ],
+                    "terminal": true
                   },
                   {
-                    "match": [{"path": ["/protected"]}],
+                    "match": [{
+                      "path_regexp": {
+                        "pattern": "^/protected/?$"
+                      }
+                    }],
                     "handle": [
                       {
                         "handler": "altcha_verify",
@@ -269,6 +363,13 @@ For production deployments using JSON configuration (common in WAF-as-a-service 
   }
 }
 ```
+
+**Important JSON Configuration Notes:**
+
+- Use `path_regexp` with pattern `^/path/?$` to handle both `/path` and `/path/` (trailing slash)
+- Set `terminal: true` for routes that should not fall through
+- Use `rewrite` before `file_server` to serve index.html at /captcha
+- Recommended `max_number: 1000000` for ~200ms solve time
 
 ### WAF-Protected Site Integration
 
@@ -620,6 +721,52 @@ Check Redis is running and URI is correct:
 redis-cli -u redis://localhost:6379/0 ping
 ```
 
+### Blank Page at /captcha/
+
+If `/captcha` works but `/captcha/` shows a blank page, your route isn't handling trailing slashes.
+
+**Fix:** Use `path_regexp` in JSON config:
+
+```json
+{
+  "match": [{
+    "path_regexp": {
+      "pattern": "^/captcha/?$"
+    }
+  }]
+}
+```
+
+Or in Caddyfile, use wildcards:
+
+```caddyfile
+route /captcha* {
+    rewrite * /index.html
+    root * /var/www/altcha
+    file_server
+}
+```
+
+### Widget Shows "Verification Failed"
+
+This usually indicates a protocol mismatch. Check:
+
+```bash
+# 1. Verify challenge endpoint returns correct JSON
+curl https://example.com/api/altcha/challenge | jq
+
+# Expected fields:
+# - algorithm (string)
+# - challenge (string - hex hash)
+# - maxNumber (int - MUST be camelCase, not maxnumber!)
+# - salt (string - hex)
+# - signature (string - HMAC of challenge only)
+
+# 2. Check browser console for errors
+# 3. Verify widget is NOT using verifyurl attribute (self-hosted mode)
+# 4. Hard refresh browser: Ctrl+Shift+R
+```
+
 ## Development
 
 ### Build from Source
@@ -628,12 +775,16 @@ redis-cli -u redis://localhost:6379/0 ping
 git clone https://github.com/stardothosting/caddy-altcha.git
 cd caddy-altcha
 go mod download
-xcaddy build --with github.com/stardothosting/caddy-altcha=.
+xcaddy build v2.8.4 --with github.com/stardothosting/caddy-altcha=.
 ```
 
 ### Run Tests
 
 ```bash
+# Run all tests
+make test
+
+# Or run individually:
 go test ./...
 go test -race ./...
 go test -bench=. -benchmem

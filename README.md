@@ -207,6 +207,300 @@ altcha_verify @external {
 }
 ```
 
+## JSON Configuration for Production
+
+For production deployments using JSON configuration (common in WAF-as-a-service setups):
+
+### Complete Test Endpoint Example
+
+```json
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "main": {
+          "listen": [":443"],
+          "routes": [
+            {
+              "match": [{"host": ["test.example.com"]}],
+              "handle": [{
+                "handler": "subroute",
+                "routes": [
+                  {
+                    "match": [{"path": ["/api/altcha/challenge"]}],
+                    "handle": [{
+                      "handler": "altcha_challenge",
+                      "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+                      "algorithm": "SHA-256",
+                      "max_number": 100000,
+                      "expires": "5m"
+                    }]
+                  },
+                  {
+                    "match": [{"path": ["/captcha"]}],
+                    "handle": [{
+                      "handler": "file_server",
+                      "root": "/var/www/altcha"
+                    }]
+                  },
+                  {
+                    "match": [{"path": ["/protected"]}],
+                    "handle": [
+                      {
+                        "handler": "altcha_verify",
+                        "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+                        "session_backend": "memory://",
+                        "challenge_redirect": "/captcha",
+                        "preserve_post_data": true
+                      },
+                      {
+                        "handler": "static_response",
+                        "body": "{\"success\": true, \"message\": \"Verification passed\"}"
+                      }
+                    ]
+                  }
+                ]
+              }]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+### WAF-Protected Site Integration
+
+For sites behind Coraza WAF, add ALTCHA routes to existing configurations:
+
+```json
+{
+  "@id": "example.com",
+  "match": [{"host": ["example.com"]}],
+  "handle": [{
+    "handler": "subroute",
+    "routes": [
+      {
+        "@comment": "Coraza WAF - runs first",
+        "handle": [{
+          "handler": "waf",
+          "directives": "SecComponentSignature \"WAF | example.com\"\nSecRuleEngine On\n..."
+        }]
+      },
+      {
+        "@comment": "ALTCHA Challenge Endpoint",
+        "match": [{"path": ["/api/altcha/challenge"]}],
+        "handle": [{
+          "handler": "altcha_challenge",
+          "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+          "algorithm": "SHA-256",
+          "max_number": 100000,
+          "expires": "5m"
+        }]
+      },
+      {
+        "@comment": "ALTCHA Challenge UI",
+        "match": [{"path": ["/captcha"]}],
+        "handle": [{
+          "handler": "file_server",
+          "root": "/var/www/altcha"
+        }]
+      },
+      {
+        "@comment": "Protected routes requiring ALTCHA",
+        "match": [{"path": ["/login", "/register", "/api/submit"]}],
+        "handle": [
+          {
+            "handler": "altcha_verify",
+            "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+            "session_backend": "redis://localhost:6379/1",
+            "session_ttl": "5m",
+            "verified_cookie_name": "altcha_verified",
+            "verified_cookie_ttl": 3600,
+            "challenge_redirect": "/captcha",
+            "preserve_post_data": true,
+            "coraza_env_var": "altcha_required"
+          },
+          {
+            "handler": "reverse_proxy",
+            "upstreams": [{"dial": "backend:443"}]
+          }
+        ]
+      },
+      {
+        "@comment": "Unprotected routes bypass ALTCHA",
+        "handle": [{
+          "handler": "reverse_proxy",
+          "upstreams": [{"dial": "backend:443"}]
+        }]
+      }
+    ]
+  }],
+  "terminal": true
+}
+```
+
+### Deployment Steps
+
+1. Generate HMAC key:
+
+```bash
+openssl rand -base64 32
+```
+
+2. Create challenge UI directory:
+
+```bash
+mkdir -p /var/www/altcha
+```
+
+3. Create `/var/www/altcha/index.html`:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verification Required</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 500px;
+            text-align: center;
+        }
+        h1 { margin-top: 0; color: #333; }
+        p { color: #666; line-height: 1.6; }
+        #altcha-widget { margin: 2rem 0; }
+        .error { color: #d32f2f; margin-top: 1rem; }
+        .loading { color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Verification Required</h1>
+        <p>Please complete the challenge below to continue.</p>
+        
+        <form id="altcha-form" method="POST">
+            <div id="altcha-widget"></div>
+            <div id="status" class="loading">Loading challenge...</div>
+        </form>
+    </div>
+
+    <script type="module">
+        import 'altcha' from 'https://cdn.jsdelivr.net/npm/altcha/dist/altcha.min.js';
+
+        const widget = document.createElement('altcha-widget');
+        widget.setAttribute('challengeurl', '/api/altcha/challenge');
+        widget.setAttribute('auto', 'onload');
+        
+        document.getElementById('altcha-widget').appendChild(widget);
+        document.getElementById('status').textContent = 'Solving challenge...';
+
+        widget.addEventListener('statechange', (ev) => {
+            const state = ev.detail.state;
+            const status = document.getElementById('status');
+            
+            if (state === 'verified') {
+                status.textContent = 'Verified! Redirecting...';
+                status.style.color = '#2e7d32';
+                
+                const payload = ev.detail.payload;
+                const urlParams = new URLSearchParams(window.location.search);
+                const sessionId = urlParams.get('session');
+                
+                let redirectUrl = sessionId 
+                    ? `/?session=${sessionId}&altcha=${encodeURIComponent(payload)}`
+                    : `/?altcha=${encodeURIComponent(payload)}`;
+                
+                setTimeout(() => window.location.href = redirectUrl, 500);
+            } else if (state === 'error') {
+                status.textContent = 'Verification failed. Please refresh and try again.';
+                status.className = 'error';
+            }
+        });
+    </script>
+</body>
+</html>
+```
+
+4. Set environment variable:
+
+```bash
+export ALTCHA_HMAC_KEY="your-generated-key-here"
+```
+
+5. Build Caddy with ALTCHA module:
+
+```bash
+xcaddy build --with github.com/stardothosting/caddy-altcha \
+  --with github.com/corazawaf/coraza-caddy/v2
+```
+
+6. Load configuration:
+
+```bash
+caddy reload --config /path/to/config.json
+```
+
+7. Test endpoints:
+
+```bash
+# Health check
+curl https://test.example.com/health
+
+# Challenge generation
+curl https://test.example.com/api/altcha/challenge
+
+# Protected route (should redirect)
+curl -I https://test.example.com/protected
+```
+
+### Notes on File Server Behavior
+
+The `file_server` handler automatically serves `index.html` when a directory is requested. When configured with:
+
+```json
+{
+  "handler": "file_server",
+  "root": "/var/www/altcha"
+}
+```
+
+Requesting `/captcha` will serve `/var/www/altcha/index.html`.
+
+### HMAC Key Management
+
+The HMAC key must be identical in both `altcha_challenge` and `altcha_verify` handlers. Options:
+
+1. Environment variable (recommended):
+```json
+"hmac_key": "{env.ALTCHA_HMAC_KEY}"
+```
+
+2. Hardcoded (less secure, avoid in production):
+```json
+"hmac_key": "your-actual-key-here"
+```
+
+3. Per-site keys (for multi-tenant setups):
+```json
+"hmac_key": "{env.ALTCHA_HMAC_KEY_SITE1}"
+```
+
 ## Coraza WAF Integration
 
 Use Coraza to analyze requests and only challenge suspicious ones:
@@ -331,7 +625,7 @@ redis-cli -u redis://localhost:6379/0 ping
 ### Build from Source
 
 ```bash
-git clone https://github.com/shift8-projects/caddy-altcha.git
+git clone https://github.com/stardothosting/caddy-altcha.git
 cd caddy-altcha
 go mod download
 xcaddy build --with github.com/stardothosting/caddy-altcha=.

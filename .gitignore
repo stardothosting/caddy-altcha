@@ -46,4 +46,10 @@ coverage.html
 # Test artifacts
 session/file:*/
 
+# Local testing
+www/
+config-local.json
+
 .cursorrules
+_altcha-ref/
+_tests/

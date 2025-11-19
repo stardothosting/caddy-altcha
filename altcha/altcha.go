@@ -27,7 +27,7 @@ type ChallengeOptions struct {
 type Challenge struct {
 	Algorithm string `json:"algorithm"`
 	Challenge string `json:"challenge"`
-	MaxNumber int    `json:"maxnumber"`
+	MaxNumber int    `json:"maxNumber"`
 	Salt      string `json:"salt"`
 	Signature string `json:"signature"`
 }
@@ -60,8 +60,8 @@ func CreateChallenge(opts ChallengeOptions) (*Challenge, error) {
 		return nil, fmt.Errorf("failed to generate target number: %w", err)
 	}
 
-	// Create challenge hash
-	challengeData := fmt.Sprintf("%s:%d", salt, targetNum)
+	// Create challenge hash (NO separator between salt and number!)
+	challengeData := fmt.Sprintf("%s%d", salt, targetNum)
 	challengeHash, err := hashData(opts.Algorithm, challengeData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash challenge: %w", err)
@@ -74,15 +74,8 @@ func CreateChallenge(opts ChallengeOptions) (*Challenge, error) {
 		Salt:      salt,
 	}
 
-	// Sign the challenge
-	signatureData := fmt.Sprintf("%s:%s:%d:%s",
-		challenge.Algorithm,
-		challenge.Challenge,
-		challenge.MaxNumber,
-		challenge.Salt,
-	)
-
-	challenge.Signature, err = createHMAC(opts.HMACKey, signatureData)
+	// Sign the challenge (HMAC of the challenge hash only)
+	challenge.Signature, err = createHMAC(opts.HMACKey, challenge.Challenge)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign challenge: %w", err)
 	}
@@ -104,14 +97,8 @@ func VerifySolution(payload, hmacKey string, checkExpires bool) (bool, error) {
 		return false, fmt.Errorf("invalid payload format: %w", err)
 	}
 
-	// Verify signature
-	signatureData := fmt.Sprintf("%s:%s:%s",
-		solution.Algorithm,
-		solution.Challenge,
-		solution.Salt,
-	)
-
-	expectedSignature, err := createHMAC(hmacKey, signatureData)
+	// Verify signature by re-creating the challenge
+	expectedSignature, err := createHMAC(hmacKey, solution.Challenge)
 	if err != nil {
 		return false, fmt.Errorf("failed to compute signature: %w", err)
 	}
@@ -120,8 +107,8 @@ func VerifySolution(payload, hmacKey string, checkExpires bool) (bool, error) {
 		return false, nil
 	}
 
-	// Verify the solution
-	solutionData := fmt.Sprintf("%s:%d", solution.Salt, solution.Number)
+	// Verify the solution (NO separator between salt and number!)
+	solutionData := fmt.Sprintf("%s%d", solution.Salt, solution.Number)
 	solutionHash, err := hashData(solution.Algorithm, solutionData)
 	if err != nil {
 		return false, fmt.Errorf("failed to hash solution: %w", err)
@@ -214,14 +201,8 @@ func CreateSolutionPayload(algorithm, challenge, salt string, number int, hmacKe
 		Salt:      salt,
 	}
 
-	// Sign the solution
-	signatureData := fmt.Sprintf("%s:%s:%s",
-		solution.Algorithm,
-		solution.Challenge,
-		solution.Salt,
-	)
-
-	signature, err := createHMAC(hmacKey, signatureData)
+	// Sign the solution (HMAC of challenge hash only)
+	signature, err := createHMAC(hmacKey, solution.Challenge)
 	if err != nil {
 		return "", err
 	}
@@ -240,7 +221,7 @@ func CreateSolutionPayload(algorithm, challenge, salt string, number int, hmacKe
 // SolveChallenge finds a solution to a challenge (for testing)
 func SolveChallenge(challenge *Challenge, hmacKey string, maxAttempts int) (string, error) {
 	for i := 0; i < maxAttempts; i++ {
-		testData := fmt.Sprintf("%s:%d", challenge.Salt, i)
+		testData := fmt.Sprintf("%s%d", challenge.Salt, i)
 		testHash, err := hashData(challenge.Algorithm, testData)
 		if err != nil {
 			return "", err
@@ -263,14 +244,8 @@ func SolveChallenge(challenge *Challenge, hmacKey string, maxAttempts int) (stri
 
 // ValidateChallenge validates a challenge structure
 func ValidateChallenge(challenge *Challenge, hmacKey string) bool {
-	signatureData := fmt.Sprintf("%s:%s:%d:%s",
-		challenge.Algorithm,
-		challenge.Challenge,
-		challenge.MaxNumber,
-		challenge.Salt,
-	)
-
-	expectedSignature, err := createHMAC(hmacKey, signatureData)
+	// Signature is HMAC of the challenge hash only
+	expectedSignature, err := createHMAC(hmacKey, challenge.Challenge)
 	if err != nil {
 		return false
 	}

@@ -9,9 +9,11 @@ import (
 func init() {
 	caddy.RegisterModule(ChallengeHandler{})
 	caddy.RegisterModule(VerifyHandler{})
+	caddy.RegisterModule(VerifySolutionHandler{})
 
 	httpcaddyfile.RegisterHandlerDirective("altcha_challenge", parseCaddyfile)
 	httpcaddyfile.RegisterHandlerDirective("altcha_verify", parseCaddyfile)
+	httpcaddyfile.RegisterHandlerDirective("altcha_verify_solution", parseCaddyfile)
 }
 
 // parseCaddyfile registers the Caddyfile directives
@@ -33,6 +35,13 @@ func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error)
 			return nil, err
 		}
 		handler = vh
+	case "altcha_verify_solution":
+		vsh := new(VerifySolutionHandler)
+		err := vsh.UnmarshalCaddyfile(h.Dispenser)
+		if err != nil {
+			return nil, err
+		}
+		handler = vsh
 	}
 
 	return handler, nil

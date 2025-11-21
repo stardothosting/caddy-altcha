@@ -127,9 +127,16 @@ Create an HTML page with the ALTCHA widget (proof-of-work only):
             if (ev.detail.state === 'verified') {
                 const payload = ev.detail.payload;
                 const urlParams = new URLSearchParams(window.location.search);
-                const returnTo = urlParams.get('return') || '/protected';
+                const session = urlParams.get('session'); // Session ID contains return URI
                 
-                window.location.href = `${returnTo}?altcha=${encodeURIComponent(payload)}`;
+                // Redirect with payload and session ID
+                // Module will retrieve return URI from session server-side
+                let redirectURL = `/?altcha=${encodeURIComponent(payload)}`;
+                if (session) {
+                    redirectURL += `&session=${encodeURIComponent(session)}`;
+                }
+                
+                window.location.href = redirectURL;
             }
         });
     </script>
@@ -527,9 +534,11 @@ mkdir -p /var/www/altcha
                 const urlParams = new URLSearchParams(window.location.search);
                 const sessionId = urlParams.get('session');
                 
-                let redirectUrl = sessionId 
-                    ? `/?session=${sessionId}&altcha=${encodeURIComponent(payload)}`
-                    : `/?altcha=${encodeURIComponent(payload)}`;
+                // Always include session ID - it contains the return URI
+                let redirectUrl = `/?altcha=${encodeURIComponent(payload)}`;
+                if (sessionId) {
+                    redirectUrl += `&session=${encodeURIComponent(sessionId)}`;
+                }
                 
                 setTimeout(() => window.location.href = redirectUrl, 500);
             } else if (state === 'error') {
@@ -717,24 +726,27 @@ altcha_verify {
 }
 ```
 
-### Automatic Return URI Preservation
+### Automatic Return URI Preservation (Session-Based)
 
 The module automatically preserves the original request URI when redirecting users to the challenge page. After solving the captcha, users are redirected back to their originally requested page.
 
 **How it works:**
 
 1. User requests `/wp-login.php` without verification
-2. Module redirects to `/captcha?return=/wp-login.php` (automatic)
-3. User solves challenge
-4. Widget redirects to `/wp-login.php?altcha=<payload>`
-5. Module verifies solution and redirects to clean `/wp-login.php`
+2. Module stores `/wp-login.php` in session backend (secure, server-side)
+3. Module redirects to `/captcha?session=<session-id>` (only session ID in URL)
+4. User solves challenge
+5. Widget redirects to `/wp-login.php?altcha=<payload>&session=<session-id>`
+6. Module retrieves return URI from session, verifies solution
+7. Module redirects to clean `/wp-login.php` or continues request
 
-**No configuration needed** - this behavior is automatic. The module:
-- Appends `?return=<original-uri>` for GET requests
-- Stores return URI in session for POST requests (when `preserve_post_data: true`)
-- Validates all redirects are same-origin (prevents open redirect attacks)
+**Security benefits:**
+- Return URI stored server-side in session backend (not in URL)
+- No URL parameter tampering possible
+- Prevents open redirect attacks
+- Session is one-time use (deleted after retrieval)
 
-**Widget compatibility:** The included widget examples automatically read the `?return=` parameter and redirect accordingly.
+**No configuration needed** - this behavior is automatic. Sessions are required for this feature (use `memory://`, `file://`, or `redis://` backend).
 
 ### Redis Connection Failed
 

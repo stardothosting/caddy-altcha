@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -71,10 +70,11 @@ func (VerifyHandler) CaddyModule() caddy.ModuleInfo {
 
 // StoredRequest represents a saved request
 type StoredRequest struct {
-	Method  string              `json:"method"`
-	URL     string              `json:"url"`
-	Headers map[string][]string `json:"headers"`
-	Body    []byte              `json:"body"`
+	Method    string              `json:"method"`
+	URL       string              `json:"url"`
+	Headers   map[string][]string `json:"headers"`
+	Body      []byte              `json:"body"`
+	ReturnURI string              `json:"return_uri,omitempty"`
 }
 
 // Provision sets up the verify handler
@@ -202,23 +202,53 @@ func (h *VerifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 		zap.String("path", r.URL.Path),
 		zap.String("client_ip", r.RemoteAddr))
 
-	// Check for return URI parameter
-	if returnURI := r.URL.Query().Get("return"); returnURI != "" {
-		// Validate it's safe (same-origin) to prevent open redirect
-		if h.isSafeRedirect(returnURI, r.Host) {
-			h.log.Debug("redirecting to original URI after verification",
-				zap.String("return_uri", returnURI))
-			http.Redirect(w, r, returnURI, http.StatusSeeOther)
-			return nil
-		}
-		h.log.Warn("unsafe return URI rejected",
-			zap.String("return_uri", returnURI),
-			zap.String("host", r.Host))
-	}
-
-	// Check if we need to restore a saved request
+	// Check for session ID (contains return URI and optional POST data)
 	if sessionID := r.URL.Query().Get("session"); sessionID != "" {
-		return h.restoreRequest(w, r, sessionID, next)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		
+		data, err := h.sessionBackend.Get(ctx, sessionID)
+		if err != nil {
+			h.log.Warn("failed to retrieve session", zap.Error(err))
+			return next.ServeHTTP(w, r)
+		}
+		
+		// Delete session after retrieval (one-time use)
+		go h.sessionBackend.Delete(context.Background(), sessionID)
+		
+		var storedReq StoredRequest
+		if err := json.Unmarshal(data, &storedReq); err != nil {
+			h.log.Error("failed to unmarshal session data", zap.Error(err))
+			return next.ServeHTTP(w, r)
+		}
+		
+		// Get return URI from session (secure - not from URL parameter)
+		returnURI := storedReq.ReturnURI
+		if returnURI != "" {
+			// Validate it's safe even though it came from our session (defense in depth)
+			if h.isSafeRedirect(returnURI, r.Host) {
+				h.log.Debug("redirecting to original URI from session",
+					zap.String("return_uri", returnURI))
+				
+				// If POST data was preserved, restore and continue
+				if storedReq.Method == "POST" && len(storedReq.Body) > 0 {
+					r.Method = storedReq.Method
+					r.Body = io.NopCloser(bytes.NewBuffer(storedReq.Body))
+					for key, values := range storedReq.Headers {
+						r.Header[key] = values
+					}
+					h.log.Debug("restored POST data from session")
+					return next.ServeHTTP(w, r)
+				}
+				
+				// For GET requests, redirect to clean URL
+				http.Redirect(w, r, returnURI, http.StatusSeeOther)
+				return nil
+			}
+			h.log.Warn("unsafe return URI rejected from session",
+				zap.String("return_uri", returnURI),
+				zap.String("host", r.Host))
+		}
 	}
 
 	return next.ServeHTTP(w, r)
@@ -274,95 +304,62 @@ func (h *VerifyHandler) verifySolution(payload string) (bool, error) {
 // redirectToChallenge redirects to the challenge page
 func (h *VerifyHandler) redirectToChallenge(w http.ResponseWriter, r *http.Request) error {
 	originalURI := r.URL.RequestURI()
-	redirectURL := h.ChallengeRedirect
-
-	// Preserve POST data if configured
-	if r.Method == http.MethodPost && h.PreservePostData {
-		sessionID, err := h.saveRequest(r)
-		if err != nil {
-			h.log.Error("failed to save request", zap.Error(err))
-		} else {
-			redirectURL = fmt.Sprintf("%s?session=%s&return=%s", redirectURL, sessionID, queryEscape(originalURI))
-			h.log.Debug("redirecting with session and return URI",
-				zap.String("original_uri", originalURI),
-				zap.String("session_id", sessionID))
-		}
-	} else {
-		// For GET requests, just append return parameter
-		redirectURL = fmt.Sprintf("%s?return=%s", redirectURL, queryEscape(originalURI))
-		h.log.Debug("redirecting with return URI",
-			zap.String("original_uri", originalURI))
-	}
-
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
-	return nil
-}
-
-// saveRequest stores a request for later restoration
-func (h *VerifyHandler) saveRequest(r *http.Request) (string, error) {
+	
+	// Generate session ID for this verification flow
 	sessionID, err := GenerateSessionID()
 	if err != nil {
-		return "", err
+		h.log.Error("failed to generate session ID", zap.Error(err))
+		// Fallback: redirect without session
+		http.Redirect(w, r, h.ChallengeRedirect, http.StatusSeeOther)
+		return nil
 	}
-
-	// Read body
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return "", err
-	}
-	r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-	// Store request
+	
+	// Always store return URI in session (secure approach)
 	storedReq := StoredRequest{
-		Method:  r.Method,
-		URL:     r.URL.String(),
-		Headers: r.Header,
-		Body:    body,
+		ReturnURI: originalURI,
 	}
-
+	
+	// For POST requests, also store request data if configured
+	if r.Method == http.MethodPost && h.PreservePostData {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			h.log.Error("failed to read request body", zap.Error(err))
+		} else {
+			r.Body = io.NopCloser(bytes.NewBuffer(body))
+			storedReq.Method = r.Method
+			storedReq.URL = r.URL.String()
+			storedReq.Headers = r.Header
+			storedReq.Body = body
+		}
+	}
+	
+	// Marshal and store in session backend
 	data, err := json.Marshal(storedReq)
 	if err != nil {
-		return "", err
+		h.log.Error("failed to marshal session data", zap.Error(err))
+		http.Redirect(w, r, h.ChallengeRedirect, http.StatusSeeOther)
+		return nil
 	}
-
+	
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
+	
 	if err := h.sessionBackend.Store(ctx, sessionID, data, time.Duration(h.SessionTTL)); err != nil {
-		return "", err
+		h.log.Error("failed to store session", zap.Error(err))
+		http.Redirect(w, r, h.ChallengeRedirect, http.StatusSeeOther)
+		return nil
 	}
-
-	return sessionID, nil
-}
-
-// restoreRequest restores a saved request and continues processing
-func (h *VerifyHandler) restoreRequest(w http.ResponseWriter, r *http.Request, sessionID string, next caddyhttp.Handler) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	data, err := h.sessionBackend.Get(ctx, sessionID)
-	if err != nil {
-		h.log.Warn("failed to restore session", zap.Error(err))
-		return next.ServeHTTP(w, r)
-	}
-
-	// Delete session after retrieval
-	go h.sessionBackend.Delete(context.Background(), sessionID)
-
-	var storedReq StoredRequest
-	if err := json.Unmarshal(data, &storedReq); err != nil {
-		h.log.Error("failed to unmarshal stored request", zap.Error(err))
-		return next.ServeHTTP(w, r)
-	}
-
-	// Restore request properties
-	r.Method = storedReq.Method
-	r.Body = io.NopCloser(bytes.NewBuffer(storedReq.Body))
-	for key, values := range storedReq.Headers {
-		r.Header[key] = values
-	}
-
-	return next.ServeHTTP(w, r)
+	
+	// Only session ID in URL (return URI is stored server-side)
+	redirectURL := fmt.Sprintf("%s?session=%s", h.ChallengeRedirect, sessionID)
+	
+	h.log.Debug("redirecting to challenge with session",
+		zap.String("session_id", sessionID),
+		zap.String("original_uri", originalURI),
+		zap.Bool("has_post_data", storedReq.Method == "POST"))
+	
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	return nil
 }
 
 // isSafeRedirect validates that a redirect URI is safe (same-origin)
@@ -383,11 +380,6 @@ func (h *VerifyHandler) isSafeRedirect(redirectURI string, currentHost string) b
 	}
 
 	return true
-}
-
-// queryEscape is a helper to URL-escape query parameters
-func queryEscape(s string) string {
-	return url.QueryEscape(s)
 }
 
 // UnmarshalCaddyfile sets up the handler from Caddyfile

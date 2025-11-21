@@ -127,11 +127,12 @@ Create an HTML page with the ALTCHA widget (proof-of-work only):
             if (ev.detail.state === 'verified') {
                 const payload = ev.detail.payload;
                 const urlParams = new URLSearchParams(window.location.search);
-                const session = urlParams.get('session'); // Session ID contains return URI
+                const session = urlParams.get('session');
+                const returnTo = urlParams.get('return') || '/'; // Where to redirect after verification
                 
-                // Redirect with payload and session ID
-                // Module will retrieve return URI from session server-side
-                let redirectURL = `/?altcha=${encodeURIComponent(payload)}`;
+                // Redirect back to original protected page with solution
+                // The same handler that caught us will now verify and let us through
+                let redirectURL = `${returnTo}?altcha=${encodeURIComponent(payload)}`;
                 if (session) {
                     redirectURL += `&session=${encodeURIComponent(session)}`;
                 }

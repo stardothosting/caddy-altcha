@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -37,7 +38,27 @@ type ChallengeHandler struct {
 	// CodeLength is the length of the visual code (default: 6)
 	CodeLength int `json:"code_length,omitempty"`
 
-	log *zap.Logger
+	// RateLimitRequests is max requests per window (0 = disabled)
+	RateLimitRequests int `json:"rate_limit_requests,omitempty"`
+
+	// RateLimitWindow is the time window for rate limiting
+	RateLimitWindow caddy.Duration `json:"rate_limit_window,omitempty"`
+
+	log         *zap.Logger
+	rateLimiter *rateLimiter
+}
+
+// rateLimiter implements a simple per-IP rate limiter
+type rateLimiter struct {
+	requests map[string]*ipRateLimit
+	mu       sync.RWMutex
+	max      int
+	window   time.Duration
+}
+
+type ipRateLimit struct {
+	count     int
+	resetTime time.Time
 }
 
 // CaddyModule returns the Caddy module information
@@ -67,6 +88,17 @@ func (h *ChallengeHandler) Provision(ctx caddy.Context) error {
 	}
 	if h.CodeLength == 0 {
 		h.CodeLength = 6
+	}
+
+	// Initialize rate limiter if configured
+	if h.RateLimitRequests > 0 {
+		if h.RateLimitWindow == 0 {
+			h.RateLimitWindow = caddy.Duration(1 * time.Minute)
+		}
+		h.rateLimiter = newRateLimiter(h.RateLimitRequests, time.Duration(h.RateLimitWindow))
+		h.log.Info("rate limiting enabled",
+			zap.Int("max_requests", h.RateLimitRequests),
+			zap.Duration("window", time.Duration(h.RateLimitWindow)))
 	}
 
 	h.log.Info("provisioning ALTCHA challenge handler",
@@ -113,6 +145,15 @@ func (h *ChallengeHandler) Validate() error {
 func (h *ChallengeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		return caddyhttp.Error(http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+	}
+
+	// Check rate limit if enabled
+	if h.rateLimiter != nil {
+		clientIP := r.RemoteAddr
+		if !h.rateLimiter.allow(clientIP) {
+			h.log.Warn("rate limit exceeded", zap.String("client_ip", clientIP))
+			return caddyhttp.Error(http.StatusTooManyRequests, fmt.Errorf("rate limit exceeded"))
+		}
 	}
 
 	// Create challenge
@@ -221,6 +262,26 @@ func (h *ChallengeHandler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 				h.CodeLength = codeLen
 
+			case "rate_limit_requests":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				var rateLimit int
+				if _, err := fmt.Sscanf(d.Val(), "%d", &rateLimit); err != nil {
+					return d.Errf("invalid rate_limit_requests: %v", err)
+				}
+				h.RateLimitRequests = rateLimit
+
+			case "rate_limit_window":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				dur, err := time.ParseDuration(d.Val())
+				if err != nil {
+					return d.Errf("invalid rate_limit_window: %v", err)
+				}
+				h.RateLimitWindow = caddy.Duration(dur)
+
 			default:
 				return d.Errf("unknown subdirective: %s", d.Val())
 			}
@@ -228,6 +289,70 @@ func (h *ChallengeHandler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	}
 
 	return nil
+}
+
+// newRateLimiter creates a new rate limiter
+func newRateLimiter(max int, window time.Duration) *rateLimiter {
+	rl := &rateLimiter{
+		requests: make(map[string]*ipRateLimit),
+		max:      max,
+		window:   window,
+	}
+	
+	// Start cleanup goroutine
+	go rl.cleanup()
+	
+	return rl
+}
+
+// allow checks if a request from the given IP is allowed
+func (rl *rateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	
+	now := time.Now()
+	
+	if limit, exists := rl.requests[ip]; exists {
+		if now.After(limit.resetTime) {
+			// Window expired, reset counter
+			limit.count = 1
+			limit.resetTime = now.Add(rl.window)
+			return true
+		}
+		
+		if limit.count >= rl.max {
+			// Rate limit exceeded
+			return false
+		}
+		
+		// Increment counter
+		limit.count++
+		return true
+	}
+	
+	// First request from this IP
+	rl.requests[ip] = &ipRateLimit{
+		count:     1,
+		resetTime: now.Add(rl.window),
+	}
+	return true
+}
+
+// cleanup periodically removes expired entries
+func (rl *rateLimiter) cleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	
+	for range ticker.C {
+		rl.mu.Lock()
+		now := time.Now()
+		for ip, limit := range rl.requests {
+			if now.After(limit.resetTime) {
+				delete(rl.requests, ip)
+			}
+		}
+		rl.mu.Unlock()
+	}
 }
 
 // Interface guards

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -118,7 +119,8 @@ func VerifySolution(payload, hmacKey string, checkExpires bool) (bool, error) {
 		return false, fmt.Errorf("failed to compute signature: %w", err)
 	}
 
-	if solution.Signature != expectedSignature {
+	// Use constant-time comparison to prevent timing attacks
+	if subtle.ConstantTimeCompare([]byte(solution.Signature), []byte(expectedSignature)) != 1 {
 		return false, nil
 	}
 
@@ -265,7 +267,8 @@ func ValidateChallenge(challenge *Challenge, hmacKey string) bool {
 		return false
 	}
 
-	return challenge.Signature == expectedSignature
+	// Use constant-time comparison to prevent timing attacks
+	return subtle.ConstantTimeCompare([]byte(challenge.Signature), []byte(expectedSignature)) == 1
 }
 
 // GenerateCodeChallenge creates a visual code challenge (image with random code)

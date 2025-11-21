@@ -3,6 +3,7 @@ package caddyaltcha
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"net/http"
 )
 
@@ -88,12 +89,13 @@ func (c *CookieConfig) DeleteCookie(w http.ResponseWriter) {
 }
 
 // GenerateSessionID creates a cryptographically random session ID
+// Uses hex encoding for consistent 64-character session IDs with full entropy
 func GenerateSessionID() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return base64.URLEncoding.EncodeToString(b), nil
+	return hex.EncodeToString(b), nil
 }
 
 // GenerateCookieValue creates a random cookie value

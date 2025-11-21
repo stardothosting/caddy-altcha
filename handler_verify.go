@@ -280,20 +280,39 @@ func (h *VerifyHandler) hasValidVerificationCookie(r *http.Request) bool {
 
 // extractSolution gets the ALTCHA solution from the request
 func (h *VerifyHandler) extractSolution(r *http.Request) string {
+	const maxPayloadSize = 4096 // 4KB max payload size
+	
+	var solution string
+	
 	// Check query parameter
-	if solution := r.URL.Query().Get(h.VerifyFieldName); solution != "" {
+	solution = r.URL.Query().Get(h.VerifyFieldName)
+	if solution != "" {
+		if len(solution) > maxPayloadSize {
+			h.log.Warn("oversized payload in query parameter", zap.Int("length", len(solution)))
+			return ""
+		}
 		return solution
 	}
 
 	// Check form data
 	if r.Method == http.MethodPost {
 		if err := r.ParseForm(); err == nil {
-			return r.FormValue(h.VerifyFieldName)
+			solution = r.FormValue(h.VerifyFieldName)
+			if len(solution) > maxPayloadSize {
+				h.log.Warn("oversized payload in form data", zap.Int("length", len(solution)))
+				return ""
+			}
+			return solution
 		}
 	}
 
 	// Check header
-	return r.Header.Get("X-Altcha-Solution")
+	solution = r.Header.Get("X-Altcha-Solution")
+	if len(solution) > maxPayloadSize {
+		h.log.Warn("oversized payload in header", zap.Int("length", len(solution)))
+		return ""
+	}
+	return solution
 }
 
 // verifySolution verifies an ALTCHA solution

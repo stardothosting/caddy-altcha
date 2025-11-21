@@ -179,6 +179,10 @@ altcha_challenge {
     salt_length <int>           # Salt length in bytes (default: 12)
     code_challenge <bool>       # Enable visual code challenges (default: false)
     code_length <int>           # Visual code length (default: 6, requires code_challenge: true)
+    
+    # Security (Optional)
+    rate_limit_requests <int>   # Max requests per window (0 = disabled, default: 0)
+    rate_limit_window <duration># Rate limit window (default: 1m)
 }
 ```
 
@@ -191,6 +195,12 @@ altcha_challenge {
 - Set `code_challenge: true` to add visual code input on top of proof-of-work
 - Similar to traditional CAPTCHAs but with computational challenge first
 - Requires ALTCHA obfuscation plugin in your HTML (see Widget Configuration)
+
+**Rate Limiting (Optional):**
+- `rate_limit_requests: 10` - Max 10 challenges per IP per window
+- `rate_limit_window: 1m` - Reset window duration
+- Prevents DoS attacks via excessive challenge generation
+- Returns HTTP 429 (Too Many Requests) when limit exceeded
 
 ### altcha_verify
 
@@ -220,6 +230,121 @@ altcha_verify [<matcher>] {
     coraza_env_var <string>            # Environment variable set by Coraza
 }
 ```
+
+### altcha_verify_solution (Optional)
+
+Provides a dedicated endpoint for widget-based server-side verification. This is optional and only needed if you're using the ALTCHA widget with `verifyurl` attribute (typically for ALTCHA Sentinel cloud service).
+
+```caddyfile
+altcha_verify_solution {
+    hmac_key <string>               # Required: Same key as altcha_challenge
+    allowed_origins <string...>     # Allowed CORS origins (optional, restricts widget usage)
+}
+```
+
+**CORS Security:**
+- By default (no `allowed_origins`), allows requests from any origin (backward compatible)
+- Configure `allowed_origins` to restrict which domains can use your challenges
+- Example: `allowed_origins https://yourdomain.com https://test.yourdomain.com`
+- Prevents unauthorized sites from consuming your server resources
+
+## Security Best Practices
+
+### Production Configuration
+
+```json
+{
+  "handler": "altcha_challenge",
+  "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+  "algorithm": "SHA-256",
+  "max_number": 1000000,
+  "expires": "5m",
+  "rate_limit_requests": 10,
+  "rate_limit_window": "1m"
+}
+```
+
+```json
+{
+  "handler": "altcha_verify",
+  "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+  "session_backend": "redis://localhost:6379",
+  "session_ttl": "5m",
+  "verified_cookie_secure": true,
+  "verified_cookie_http_only": true,
+  "verified_cookie_same_site": "Strict"
+}
+```
+
+### HMAC Key Generation
+
+```bash
+# Generate cryptographically secure 256-bit key
+openssl rand -base64 32
+
+# Store in environment variable
+export ALTCHA_HMAC_KEY="your-generated-key-here"
+```
+
+**Key Requirements:**
+- Minimum 32 bytes (256 bits) for strong security
+- Use `crypto/rand` or similar CSPRNG for generation
+- Never hardcode keys in configuration files
+- Rotate keys periodically (implement key rotation strategy)
+- Store securely (environment variables, secrets manager, or vault)
+
+### Rate Limiting
+
+Protect against resource exhaustion attacks:
+
+```caddyfile
+altcha_challenge {
+    hmac_key {env.ALTCHA_HMAC_KEY}
+    max_number 1000000
+    rate_limit_requests 10      # Max 10 challenges per IP
+    rate_limit_window 1m        # Per 60-second window
+}
+```
+
+**Recommendations:**
+- Development: Disable rate limiting (`rate_limit_requests: 0`)
+- Production: Start with `10-20 requests/minute`
+- High-traffic: Increase to `50-100 requests/minute` if needed
+- Monitor `429 Too Many Requests` responses to tune appropriately
+
+### CORS Restriction
+
+Prevent unauthorized widget usage:
+
+```json
+{
+  "handler": "altcha_verify_solution",
+  "hmac_key": "{env.ALTCHA_HMAC_KEY}",
+  "allowed_origins": [
+    "https://yourdomain.com",
+    "https://www.yourdomain.com"
+  ]
+}
+```
+
+**Warning:** Without `allowed_origins`, any website can embed your challenge widget and consume your server resources.
+
+### Session Security
+
+```caddyfile
+altcha_verify {
+    session_backend redis://localhost:6379
+    session_ttl 5m              # Short TTL reduces exposure window
+    verified_cookie_secure true # HTTPS only
+    verified_cookie_http_only true # Prevent XSS access
+    verified_cookie_same_site Strict # Prevent CSRF
+}
+```
+
+**Production Backend Recommendations:**
+- **Memory**: Development only (sessions lost on restart)
+- **File**: Simple deployments, single server
+- **Redis**: Production, distributed deployments, high availability
 
 ## Session Backends
 

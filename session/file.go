@@ -36,9 +36,10 @@ func NewFileBackend(dir string) (*FileBackend, error) {
 	return fb, nil
 }
 
-// Store saves data with a TTL
+// Store saves data with a TTL using atomic write-rename pattern
 func (fb *FileBackend) Store(ctx context.Context, key string, data []byte, ttl time.Duration) error {
 	filename := fb.keyToFilename(key)
+	tmpFilename := filename + ".tmp"
 
 	// Create entry with expiration
 	expiresAt := time.Now().Add(ttl)
@@ -46,18 +47,38 @@ func (fb *FileBackend) Store(ctx context.Context, key string, data []byte, ttl t
 	// Write data and expiration (simple format: expiration timestamp + newline + data)
 	content := fmt.Sprintf("%d\n", expiresAt.Unix())
 
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	// Write to temporary file first (atomic write pattern)
+	f, err := os.OpenFile(tmpFilename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create session file: %w", err)
 	}
-	defer f.Close()
 
+	// Write content
 	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		os.Remove(tmpFilename)
 		return err
 	}
 
 	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmpFilename)
 		return err
+	}
+
+	// Sync to disk before rename (ensures data is written)
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpFilename)
+		return err
+	}
+
+	f.Close()
+
+	// Atomic rename (on POSIX systems, this is atomic)
+	if err := os.Rename(tmpFilename, filename); err != nil {
+		os.Remove(tmpFilename)
+		return fmt.Errorf("failed to finalize session file: %w", err)
 	}
 
 	return nil

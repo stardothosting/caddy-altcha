@@ -100,9 +100,11 @@ Copy the example HTML to your web root:
 cp examples/www/index.html /var/www/altcha/index.html
 ```
 
-## Widget Configuration
+## Challenge Page Setup
 
-Create an HTML page with the ALTCHA widget (proof-of-work only):
+Create an HTML page at `/var/www/altcha/index.html` with the ALTCHA widget. This page will be shown to users when they need to complete a challenge.
+
+### Minimal Example (Proof-of-Work Only)
 
 ```html
 <!DOCTYPE html>
@@ -128,15 +130,16 @@ Create an HTML page with the ALTCHA widget (proof-of-work only):
                 const payload = ev.detail.payload;
                 const urlParams = new URLSearchParams(window.location.search);
                 const session = urlParams.get('session');
-                const returnTo = urlParams.get('return') || '/'; // Where to redirect after verification
+                const returnTo = urlParams.get('return') || '/';
                 
-                // Redirect back to original protected page with solution
-                // The same handler that caught us will now verify and let us through
+                // Build redirect URL with solution
                 let redirectURL = `${returnTo}?altcha=${encodeURIComponent(payload)}`;
                 if (session) {
                     redirectURL += `&session=${encodeURIComponent(session)}`;
                 }
                 
+                // Redirect back to original protected page
+                // The same altcha_verify handler will now verify the solution
                 window.location.href = redirectURL;
             }
         });
@@ -145,7 +148,54 @@ Create an HTML page with the ALTCHA widget (proof-of-work only):
 </html>
 ```
 
-**With Code Challenges (optional visual CAPTCHA):**
+### Production-Ready Example (with Styling)
+
+A complete, styled example is available in `examples/www/index.html`. Key features:
+
+- **Modern responsive design** with Poppins font
+- **Cache control headers** to prevent stale page loads
+- **Status messages** for user feedback (solving, verified, error)
+- **Logo support** with embedded SVG
+- **Mobile-friendly** layout
+
+Copy the example to your web root:
+
+```bash
+cp examples/www/index.html /var/www/altcha/index.html
+```
+
+**Or view the full source:** [examples/www/index.html](examples/www/index.html)
+
+### Critical JavaScript Requirements
+
+**You MUST include this redirect logic in your challenge page:**
+
+```javascript
+const urlParams = new URLSearchParams(window.location.search);
+const returnTo = urlParams.get('return') || '/';  // Read where to go back
+const session = urlParams.get('session');         // Preserve session for POST data
+
+// After widget verification succeeds
+let redirectURL = `${returnTo}?altcha=${encodeURIComponent(payload)}`;
+if (session) {
+    redirectURL += `&session=${encodeURIComponent(session)}`;
+}
+window.location.href = redirectURL;  // Return to protected page
+```
+
+**Why this is critical:**
+
+1. User requests `/admin/settings` (protected by `altcha_verify`)
+2. Module redirects to `/captcha?session=xyz&return=/admin/settings`
+3. User solves challenge
+4. JavaScript reads `return` parameter and redirects to `/admin/settings?altcha=payload`
+5. **Same handler** on `/admin/settings` verifies solution and lets user through
+
+**Without the `return` parameter handling, users will be redirected to root (`/`) after solving the challenge instead of their intended destination.**
+
+### Optional: Code Challenges (Visual CAPTCHA)
+
+Add visual code input on top of proof-of-work:
 
 ```html
 <script type="module" src="https://cdn.jsdelivr.net/npm/altcha@1.0.5/dist/altcha.min.js"></script>
@@ -159,10 +209,14 @@ Create an HTML page with the ALTCHA widget (proof-of-work only):
 </altcha-widget>
 ```
 
-**Important:** 
-- Pin the widget version (e.g., `@1.0.5`) to prevent breaking changes
-- Do NOT add `verifyurl` attribute for self-hosted mode
-- The widget solves challenges client-side and passes the solution via URL/form
+Then enable in your handler config: `code_challenge: true`
+
+### Important Notes
+
+- **Pin the widget version** (e.g., `@1.0.5`) to prevent breaking changes from automatic updates
+- **Do NOT add `verifyurl` attribute** - that's for ALTCHA Sentinel cloud service, not self-hosted
+- **The widget solves challenges client-side** - it generates a proof-of-work solution in the browser
+- **Cache control headers** are recommended to prevent users from seeing stale challenge pages
 
 ## Configuration Reference
 
@@ -659,9 +713,10 @@ mkdir -p /var/www/altcha
                 const payload = ev.detail.payload;
                 const urlParams = new URLSearchParams(window.location.search);
                 const sessionId = urlParams.get('session');
+                const returnTo = urlParams.get('return') || '/';  // Where to redirect after verification
                 
-                // Always include session ID - it contains the return URI
-                let redirectUrl = `/?altcha=${encodeURIComponent(payload)}`;
+                // Build redirect URL back to original protected page
+                let redirectUrl = `${returnTo}?altcha=${encodeURIComponent(payload)}`;
                 if (sessionId) {
                     redirectUrl += `&session=${encodeURIComponent(sessionId)}`;
                 }

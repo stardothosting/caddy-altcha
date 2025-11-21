@@ -18,6 +18,7 @@ The only external dependency is the ALTCHA JavaScript widget (can be self-hosted
 - Sub-10ms verification latency
 - Multiple storage backends (Redis, Memory, File)
 - POST data preservation across verification redirects
+- Automatic return URI preservation (users return to originally requested page)
 - Coraza WAF integration support
 - Secure cookie management with safe defaults
 - Production-ready with comprehensive error handling
@@ -125,7 +126,10 @@ Create an HTML page with the ALTCHA widget (proof-of-work only):
         widget.addEventListener('statechange', (ev) => {
             if (ev.detail.state === 'verified') {
                 const payload = ev.detail.payload;
-                window.location.href = `/protected?altcha=${encodeURIComponent(payload)}`;
+                const urlParams = new URLSearchParams(window.location.search);
+                const returnTo = urlParams.get('return') || '/protected';
+                
+                window.location.href = `${returnTo}?altcha=${encodeURIComponent(payload)}`;
             }
         });
     </script>
@@ -712,6 +716,25 @@ altcha_verify {
     preserve_post_data true
 }
 ```
+
+### Automatic Return URI Preservation
+
+The module automatically preserves the original request URI when redirecting users to the challenge page. After solving the captcha, users are redirected back to their originally requested page.
+
+**How it works:**
+
+1. User requests `/wp-login.php` without verification
+2. Module redirects to `/captcha?return=/wp-login.php` (automatic)
+3. User solves challenge
+4. Widget redirects to `/wp-login.php?altcha=<payload>`
+5. Module verifies solution and redirects to clean `/wp-login.php`
+
+**No configuration needed** - this behavior is automatic. The module:
+- Appends `?return=<original-uri>` for GET requests
+- Stores return URI in session for POST requests (when `preserve_post_data: true`)
+- Validates all redirects are same-origin (prevents open redirect attacks)
+
+**Widget compatibility:** The included widget examples automatically read the `?return=` parameter and redirect accordingly.
 
 ### Redis Connection Failed
 

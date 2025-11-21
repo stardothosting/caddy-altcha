@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -200,6 +202,20 @@ func (h *VerifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 		zap.String("path", r.URL.Path),
 		zap.String("client_ip", r.RemoteAddr))
 
+	// Check for return URI parameter
+	if returnURI := r.URL.Query().Get("return"); returnURI != "" {
+		// Validate it's safe (same-origin) to prevent open redirect
+		if h.isSafeRedirect(returnURI, r.Host) {
+			h.log.Debug("redirecting to original URI after verification",
+				zap.String("return_uri", returnURI))
+			http.Redirect(w, r, returnURI, http.StatusSeeOther)
+			return nil
+		}
+		h.log.Warn("unsafe return URI rejected",
+			zap.String("return_uri", returnURI),
+			zap.String("host", r.Host))
+	}
+
 	// Check if we need to restore a saved request
 	if sessionID := r.URL.Query().Get("session"); sessionID != "" {
 		return h.restoreRequest(w, r, sessionID, next)
@@ -257,6 +273,7 @@ func (h *VerifyHandler) verifySolution(payload string) (bool, error) {
 
 // redirectToChallenge redirects to the challenge page
 func (h *VerifyHandler) redirectToChallenge(w http.ResponseWriter, r *http.Request) error {
+	originalURI := r.URL.RequestURI()
 	redirectURL := h.ChallengeRedirect
 
 	// Preserve POST data if configured
@@ -265,8 +282,16 @@ func (h *VerifyHandler) redirectToChallenge(w http.ResponseWriter, r *http.Reque
 		if err != nil {
 			h.log.Error("failed to save request", zap.Error(err))
 		} else {
-			redirectURL = fmt.Sprintf("%s?session=%s", redirectURL, sessionID)
+			redirectURL = fmt.Sprintf("%s?session=%s&return=%s", redirectURL, sessionID, queryEscape(originalURI))
+			h.log.Debug("redirecting with session and return URI",
+				zap.String("original_uri", originalURI),
+				zap.String("session_id", sessionID))
 		}
+	} else {
+		// For GET requests, just append return parameter
+		redirectURL = fmt.Sprintf("%s?return=%s", redirectURL, queryEscape(originalURI))
+		h.log.Debug("redirecting with return URI",
+			zap.String("original_uri", originalURI))
 	}
 
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
@@ -338,6 +363,31 @@ func (h *VerifyHandler) restoreRequest(w http.ResponseWriter, r *http.Request, s
 	}
 
 	return next.ServeHTTP(w, r)
+}
+
+// isSafeRedirect validates that a redirect URI is safe (same-origin)
+func (h *VerifyHandler) isSafeRedirect(redirectURI string, currentHost string) bool {
+	// Must be relative URL starting with /
+	if !strings.HasPrefix(redirectURI, "/") {
+		return false
+	}
+
+	// Protocol-relative URLs (//evil.com) are dangerous
+	if strings.HasPrefix(redirectURI, "//") {
+		return false
+	}
+
+	// Check for null bytes, newlines, or other control characters
+	if strings.ContainsAny(redirectURI, "\x00\r\n") {
+		return false
+	}
+
+	return true
+}
+
+// queryEscape is a helper to URL-escape query parameters
+func queryEscape(s string) string {
+	return url.QueryEscape(s)
 }
 
 // UnmarshalCaddyfile sets up the handler from Caddyfile

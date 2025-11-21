@@ -53,3 +53,7 @@ config-local.json
 .cursorrules
 _altcha-ref/
 _tests/
+
+
+#Ignore cursor AI rules
+.cursor/rules/codacy.mdc

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -369,8 +370,12 @@ func (h *VerifyHandler) redirectToChallenge(w http.ResponseWriter, r *http.Reque
 		return nil
 	}
 	
-	// Only session ID in URL (return URI is stored server-side)
-	redirectURL := fmt.Sprintf("%s?session=%s", h.ChallengeRedirect, sessionID)
+	// Include session ID and return URI in URL
+	// Session provides server-side validation, return helps JS redirect to right place
+	redirectURL := fmt.Sprintf("%s?session=%s&return=%s", 
+		h.ChallengeRedirect, 
+		sessionID, 
+		url.QueryEscape(originalURI))
 	
 	h.log.Debug("redirecting to challenge with session",
 		zap.String("session_id", sessionID),

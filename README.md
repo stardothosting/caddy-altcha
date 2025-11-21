@@ -852,19 +852,50 @@ altcha_verify {
 }
 ```
 
-### Automatic Return URI Preservation (Session-Based)
+### User Redirected to Wrong Page After Challenge
 
-The module automatically preserves the original request URI when redirecting users to the challenge page. After solving the captcha, users are redirected back to their originally requested page.
+**Symptom**: After solving the challenge, user lands on root page (`/`) or previous page instead of intended destination.
+
+**Cause**: Challenge page JavaScript not reading the `return` parameter.
+
+**Fix**: Update your challenge page JavaScript to read the `return` parameter:
+
+```javascript
+const urlParams = new URLSearchParams(window.location.search);
+const returnTo = urlParams.get('return') || '/';  // Read destination
+const payload = ev.detail.payload;
+const session = urlParams.get('session');
+
+// Redirect to original protected page
+let redirectURL = `${returnTo}?altcha=${encodeURIComponent(payload)}`;
+if (session) {
+    redirectURL += `&session=${encodeURIComponent(session)}`;
+}
+window.location.href = redirectURL;
+```
+
+**How it works:**
+1. User clicks `/admin/settings` (protected)
+2. Handler redirects to `/captcha?session=xyz&return=/admin/settings`
+3. User solves challenge
+4. JavaScript reads `return` param and redirects to `/admin/settings?altcha=payload`
+5. **Same handler** on `/admin/settings` verifies solution and lets user through
+
+**Key point**: The `altcha_verify` handler on the protected page handles both the initial redirect AND the verification on return.
+
+### Automatic Return URI Preservation
+
+The module automatically preserves the original request URI when redirecting users to the challenge page.
 
 **How it works:**
 
 1. User requests `/wp-login.php` without verification
 2. Module stores `/wp-login.php` in session backend (secure, server-side)
-3. Module redirects to `/captcha?session=<session-id>` (only session ID in URL)
+3. Module redirects to `/captcha?session=<session-id>&return=/wp-login.php`
 4. User solves challenge
-5. Widget redirects to `/wp-login.php?altcha=<payload>&session=<session-id>`
+5. Widget reads `return` param and redirects to `/wp-login.php?altcha=<payload>&session=<session-id>`
 6. Module retrieves return URI from session, verifies solution
-7. Module redirects to clean `/wp-login.php` or continues request
+7. Module continues request or redirects to clean URL
 
 **Security benefits:**
 - Return URI stored server-side in session backend (not in URL)

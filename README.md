@@ -2,8 +2,6 @@
 
 Production-ready Caddy HTTP middleware for ALTCHA captcha verification. Protects web applications from automated abuse using cryptographic proof-of-work challenges.
 
-**🚀 Production Proven:** Deployed in [AtomicEdge](https://atomicedge.io) commercial WAF-as-a-Service platform, handling production traffic at scale.
-
 ## Architecture
 
 ALTCHA is entirely self-contained within your Caddy server. No separate ALTCHA service or external API calls are required. The module:

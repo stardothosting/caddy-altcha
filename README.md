@@ -1,6 +1,8 @@
 # Caddy ALTCHA Module
 
-Production-ready Caddy HTTP middleware module for ALTCHA captcha verification. Protects web applications from automated abuse using cryptographic proof-of-work challenges.
+Production-ready Caddy HTTP middleware for ALTCHA captcha verification. Protects web applications from automated abuse using cryptographic proof-of-work challenges.
+
+**🚀 Production Proven:** Deployed in [AtomicEdge](https://atomicedge.io) commercial WAF-as-a-Service platform, handling production traffic at scale.
 
 ## Architecture
 
@@ -14,14 +16,28 @@ The only external dependency is the ALTCHA JavaScript widget (can be self-hosted
 
 ## Features
 
+**Core Functionality:**
 - Cryptographic protection using HMAC-signed proof-of-work challenges
 - Sub-10ms verification latency
 - Multiple storage backends (Redis, Memory, File)
 - POST data preservation across verification redirects
 - Automatic return URI preservation (users return to originally requested page)
+
+**Security & Protection:**
+- Rate limiting per IP (DoS protection)
+- CORS origin validation (resource protection)
+- Constant-time HMAC comparison (timing attack prevention)
+- Secure session management with 256-bit entropy
+- Safe cookie defaults (Secure, HttpOnly, SameSite)
+- Input validation and payload size limits
+
+**Integration & Deployment:**
 - Coraza WAF integration support
-- Secure cookie management with safe defaults
 - Production-ready with comprehensive error handling
+- Distributed deployments via Redis backend
+- Environment variable configuration
+- JSON and Caddyfile configuration support
+- Docker-ready with examples
 
 ## Installation
 
@@ -851,18 +867,59 @@ example.com {
 
 ## Security
 
-### Best Practices
+This module has undergone comprehensive security auditing and implements industry best practices for cryptographic operations, session management, and DoS protection.
 
-1. Use cryptographically random HMAC keys (minimum 32 bytes)
-2. Enable Secure, HttpOnly, and SameSite cookie flags
-3. Set appropriate session TTLs (5-10 minutes recommended)
-4. Always use HTTPS in production
-5. Use authentication and TLS for Redis connections
+### Security Features
+
+**Cryptographic Security:**
+- HMAC-SHA256/384/512 signatures for challenge integrity
+- Constant-time HMAC comparison to prevent timing attacks
+- Cryptographically random session ID generation (256-bit entropy)
+- Hex-encoded session IDs (64 characters) for consistent length
+
+**Request Protection:**
+- Rate limiting per IP address (configurable sliding window)
+- Payload length validation (4KB max, early rejection)
+- Input sanitization for all user-provided data
+- Safe redirect validation to prevent open redirect attacks
+
+**Session Security:**
+- Atomic write-rename pattern for file backend (prevents race conditions)
+- Server-side session storage (no sensitive data in URLs)
+- Configurable session TTL (default 5 minutes)
+- One-time session usage for return URI restoration
+
+**Cookie Security:**
+- Secure flag enforced (HTTPS only)
+- HttpOnly flag (prevents XSS access)
+- SameSite: Strict (prevents CSRF)
+- Configurable domain and path restrictions
+
+**CORS Protection:**
+- Configurable origin whitelist for challenge endpoint
+- Prevents unauthorized widget embedding
+- Protects against resource consumption attacks
+
+**Error Handling:**
+- Generic error messages to clients (no information disclosure)
+- Detailed logging internally for debugging
+- No payload or sensitive data exposure in responses
+
+### Security Best Practices
+
+1. **HMAC Keys:** Use cryptographically random keys (minimum 32 bytes)
+2. **Rate Limiting:** Enable in production (`rate_limit_requests: 10`)
+3. **CORS Origins:** Restrict to your domains (`allowed_origins: ["https://yourdomain.com"]`)
+4. **Session Backend:** Use Redis in production for distributed security
+5. **Cookie Flags:** Keep secure defaults enabled
+6. **HTTPS Only:** Always use TLS in production
+7. **Key Rotation:** Implement periodic HMAC key rotation
+8. **Monitoring:** Track 429 (rate limit) responses to tune limits
 
 ### Key Generation
 
 ```bash
-# Generate a secure HMAC key
+# Generate a cryptographically secure 256-bit HMAC key
 openssl rand -base64 32
 ```
 
@@ -871,6 +928,17 @@ openssl rand -base64 32
 ```bash
 export ALTCHA_HMAC_KEY="$(openssl rand -base64 32)"
 ```
+
+### Security Audit
+
+All HIGH and MEDIUM severity vulnerabilities identified in November 2025 security audit have been addressed:
+- ✅ Session ID predictability eliminated
+- ✅ CORS wildcard replaced with origin validation
+- ✅ File backend race conditions fixed
+- ✅ Error message information disclosure prevented
+- ✅ Rate limiting implemented
+- ✅ Timing attack vectors mitigated
+- ✅ Payload bomb attacks prevented
 
 ## Troubleshooting
 
@@ -1055,4 +1123,4 @@ MIT License - see LICENSE file for details
 
 - [ALTCHA](https://altcha.org) - Proof-of-work captcha library
 - [Caddy](https://caddyserver.com) - Web server and reverse proxy
-- [caddy-defender](https://github.com/caddy-defender/caddy-defender) - Module architecture inspiration
+- [caddy-defender](https://github.com/JasonLovesDoggo/caddy-defender) - Module architecture inspiration

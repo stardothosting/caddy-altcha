@@ -182,22 +182,62 @@ cp examples/www/index.html /var/www/altcha/index.html
 
 ### Critical JavaScript Requirements
 
-**You MUST include this redirect logic in your challenge page:**
+**You MUST include this redirect logic in your challenge page to properly handle URLs with existing query parameters** (WordPress login, Drupal, Magento, Laravel, etc.):
 
 ```javascript
+/**
+ * Build a safe redirect URL that properly handles existing query parameters.
+ * Works with any CMS: WordPress, Drupal, Magento, Laravel, etc.
+ */
+function buildRedirectURL(returnTo, payload, session) {
+    try {
+        // Parse the return URL using the URL API
+        // This handles all edge cases: existing query params, fragments, encoding
+        const url = new URL(returnTo, window.location.origin);
+        
+        // Security: Only allow same-origin redirects to prevent open redirect attacks
+        if (url.origin !== window.location.origin) {
+            console.error('Security: Cross-origin redirect blocked:', returnTo);
+            return '/?altcha=' + encodeURIComponent(payload);
+        }
+        
+        // Use searchParams.set() to properly append/merge query parameters
+        // This automatically uses & if params exist, or ? if not
+        url.searchParams.set('altcha', payload);
+        if (session) {
+            url.searchParams.set('session', session);
+        }
+        
+        // Return relative URL (pathname + search + hash) for same-origin redirect
+        return url.pathname + url.search + url.hash;
+        
+    } catch (e) {
+        // Fallback for malformed URLs - redirect to root with payload
+        console.error('Invalid return URL, using fallback:', returnTo, e);
+        return '/?altcha=' + encodeURIComponent(payload);
+    }
+}
+
+// Usage in your statechange handler:
 const urlParams = new URLSearchParams(window.location.search);
-const returnTo = urlParams.get('return') || '/';  // Read where to go back
-const session = urlParams.get('session');         // Preserve session for POST data
+const returnTo = urlParams.get('return') || '/';
+const session = urlParams.get('session');
 
 // After widget verification succeeds
-let redirectURL = `${returnTo}?altcha=${encodeURIComponent(payload)}`;
-if (session) {
-    redirectURL += `&session=${encodeURIComponent(session)}`;
-}
-window.location.href = redirectURL;  // Return to protected page
+const redirectURL = buildRedirectURL(returnTo, payload, session);
+window.location.href = redirectURL;
 ```
 
-**Why this is critical:**
+**Why the URL API is required:**
+
+When protecting pages with existing query parameters (like WordPress login):
+- **Original URL:** `/wp-login.php?redirect_to=...&reauth=1`
+- **Bad (string concat):** `/wp-login.php?redirect_to=...&reauth=1?altcha=...` (broken - double `?`)
+- **Good (URL API):** `/wp-login.php?redirect_to=...&reauth=1&altcha=...` (correct)
+
+The URL API automatically uses `&` when query params exist, or `?` when they don't.
+
+**Flow explanation:**
 
 1. User requests `/admin/settings` (protected by `altcha_verify`)
 2. Module redirects to `/captcha?session=xyz&return=/admin/settings`
@@ -205,7 +245,7 @@ window.location.href = redirectURL;  // Return to protected page
 4. JavaScript reads `return` parameter and redirects to `/admin/settings?altcha=payload`
 5. **Same handler** on `/admin/settings` verifies solution and lets user through
 
-**Without the `return` parameter handling, users will be redirected to root (`/`) after solving the challenge instead of their intended destination.**
+**Without proper URL handling, users will experience redirect loops when the protected page has query parameters.**
 
 ### Optional: Code Challenges (Visual CAPTCHA)
 

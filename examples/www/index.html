@@ -138,25 +138,56 @@
         const sessionId = urlParams.get('session');
         const returnPath = urlParams.get('return') || '/';
         
+        /**
+         * Build a safe redirect URL that properly handles existing query parameters.
+         * Works with any CMS: WordPress, Drupal, Magento, Laravel, etc.
+         * 
+         * @param {string} returnTo - The return URL (may already have query params)
+         * @param {string} payload - The ALTCHA solution payload
+         * @param {string|null} session - Optional session ID
+         * @returns {string} - Safe redirect URL with altcha params appended correctly
+         */
+        function buildRedirectURL(returnTo, payload, session) {
+            try {
+                // Parse the return URL using the URL API
+                // This handles all edge cases: existing query params, fragments, encoding
+                const url = new URL(returnTo, window.location.origin);
+                
+                // Security: Only allow same-origin redirects to prevent open redirect attacks
+                if (url.origin !== window.location.origin) {
+                    console.error('Security: Cross-origin redirect blocked:', returnTo);
+                    return '/?altcha=' + encodeURIComponent(payload);
+                }
+                
+                // Use searchParams.set() to properly append/merge query parameters
+                // This automatically uses & if params exist, or ? if not
+                url.searchParams.set('altcha', payload);
+                if (session) {
+                    url.searchParams.set('session', session);
+                }
+                
+                // Return relative URL (pathname + search + hash) for same-origin redirect
+                return url.pathname + url.search + url.hash;
+                
+            } catch (e) {
+                // Fallback for malformed URLs - redirect to root with payload
+                console.error('Invalid return URL, using fallback:', returnTo, e);
+                return '/?altcha=' + encodeURIComponent(payload);
+            }
+        }
+        
         widget.addEventListener('statechange', (ev) => {
             if (ev.detail.state === 'verified') {
                 message.textContent = 'Verification successful! Redirecting...';
                 message.className = 'success';
                 message.style.display = 'block';
                 
-                // Submit solution
                 const payload = ev.detail.payload;
-                
-                // Build redirect URL with solution
-                const params = new URLSearchParams();
-                params.set('altcha', payload);
-                if (sessionId) {
-                    params.set('session', sessionId);
-                }
+                const redirectURL = buildRedirectURL(returnPath, payload, sessionId);
                 
                 // Redirect to original page with solution
                 setTimeout(() => {
-                    window.location.href = returnPath + '?' + params.toString();
+                    window.location.href = redirectURL;
                 }, 1000);
             } else if (ev.detail.state === 'error') {
                 message.textContent = 'Verification failed. Please try again.';

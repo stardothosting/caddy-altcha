@@ -90,6 +90,10 @@ example.com {
     @protected {
         path /login /register /api/*
     }
+
+    # IMPORTANT: defining a matcher alone does nothing.
+    # You must attach it to a handler (altcha_verify or handle block),
+    # otherwise requests will fall through to reverse_proxy.
     
     altcha_verify @protected {
         hmac_key {env.ALTCHA_HMAC_KEY}
@@ -986,6 +990,27 @@ Check that the challenge endpoint is accessible:
 
 ```bash
 curl https://example.com/api/altcha/challenge
+```
+
+### Challenge Never Appears / Request Passes Through
+
+**Cause**: The matcher was defined but never attached to `altcha_verify`, or the handler runs after `reverse_proxy`.
+
+**Fix**: Attach the matcher and ensure it runs before `reverse_proxy`:
+
+```caddyfile
+# ❌ Wrong: matcher defined but never used
+@protected path /login /register /api/*
+reverse_proxy localhost:8080
+
+# ✅ Correct: matcher attached to altcha_verify
+@protected path /login /register /api/*
+altcha_verify @protected {
+    hmac_key {env.ALTCHA_HMAC_KEY}
+    session_backend memory://
+    challenge_redirect /captcha
+}
+reverse_proxy localhost:8080
 ```
 
 ### Verification Failing
